@@ -10,6 +10,8 @@ function Stock() {
   const [loading, setLoading] = useState(true);
   const [editId, setEditId] = useState(null);
   const [editSeuil, setEditSeuil] = useState('');
+  const [editStockId, setEditStockId] = useState(null);
+  const [editStockVal, setEditStockVal] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -58,6 +60,34 @@ function Stock() {
       }
     } catch (err) {
       console.error('Erreur ajustement:', err.response?.data || err.message);
+    }
+  };
+
+  const saveStock = async (produit) => {
+    const val = parseInt(editStockVal);
+    if (isNaN(val) || val < 0) { setEditStockId(null); return; }
+    try {
+      await axios.put(`${API}/stock/${produit.id}`, {
+        stock: val,
+        seuil_alerte: produit.seuil_alerte ?? 5,
+      });
+      const seuil = produit.seuil_alerte ?? 5;
+      setProduits(prev =>
+        prev.map(p => p.id === produit.id ? { ...p, stock: val } : p)
+      );
+      if (val <= seuil) {
+        setAlertes(prev => {
+          const dejaDedans = prev.some(a => a.id === produit.id);
+          if (dejaDedans) return prev.map(a => a.id === produit.id ? { ...a, stock: val } : a);
+          return [...prev, { ...produit, stock: val }];
+        });
+      } else {
+        setAlertes(prev => prev.filter(a => a.id !== produit.id));
+      }
+    } catch (err) {
+      console.error('Erreur sauvegarde stock:', err.response?.data || err.message);
+    } finally {
+      setEditStockId(null);
     }
   };
 
@@ -166,7 +196,27 @@ function Stock() {
                           disabled={stock === 0}
                           title="Retirer 1"
                         >−</button>
-                        <span className="stock-qty">{stock}</span>
+                        {editStockId === p.id ? (
+                          <input
+                            className="stock-input"
+                            type="number"
+                            min="0"
+                            value={editStockVal}
+                            autoFocus
+                            onChange={(e) => setEditStockVal(e.target.value)}
+                            onBlur={() => saveStock(p)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveStock(p);
+                              if (e.key === 'Escape') setEditStockId(null);
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="stock-qty stock-qty-editable"
+                            onClick={() => { setEditStockId(p.id); setEditStockVal(stock); }}
+                            title="Cliquer pour saisir manuellement"
+                          >{stock}</span>
+                        )}
                         <button
                           className="btn-stock-plus"
                           onClick={() => ajusterStock(p, +1)}
