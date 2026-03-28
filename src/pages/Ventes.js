@@ -10,6 +10,9 @@ function Ventes() {
   const [remise, setRemise] = useState(0);
   const [selectedProduit, setSelectedProduit] = useState('');
   const [loading, setLoading] = useState(true);
+  const [erreur, setErreur] = useState('');
+  const [succes, setSucces] = useState('');
+  const [alertesStock, setAlertesStock] = useState([]);
 
   useEffect(() => {
     fetchData();
@@ -66,7 +69,10 @@ function Ventes() {
   const totalApresRemise = sousTotal * (1 - remise / 100);
 
   const validerVente = async () => {
-    if (panier.length === 0) return alert('Le panier est vide !');
+    if (panier.length === 0) return;
+    setErreur('');
+    setSucces('');
+    setAlertesStock([]);
     try {
       const data = {
         date_vente: new Date().toISOString().split('T')[0],
@@ -78,14 +84,18 @@ function Ventes() {
           prix_unitaire: p.prix_unitaire
         }))
       };
-      await axios.post(`${API}/ventes/`, data);
+      const res = await axios.post(`${API}/ventes/`, data);
       setPanier([]);
       setRemise(0);
       fetchData();
-      alert('Vente enregistrée !');
+      setSucces('Vente enregistrée avec succès !');
+      if (res.data.warnings && res.data.warnings.length > 0) {
+        setAlertesStock(res.data.warnings);
+      }
+      setTimeout(() => setSucces(''), 4000);
     } catch (err) {
-      console.error('Erreur vente:', err);
-      alert('Erreur lors de la vente');
+      const detail = err.response?.data?.detail;
+      setErreur(detail || 'Erreur lors de la vente');
     }
   };
 
@@ -100,6 +110,31 @@ function Ventes() {
   return (
     <div className="page">
       <h1>Enregistrer une vente</h1>
+
+      {erreur && (
+        <div className="vente-message vente-erreur">
+          Stock insuffisant — {erreur}
+        </div>
+      )}
+
+      {succes && (
+        <div className="vente-message vente-succes">
+          {succes}
+        </div>
+      )}
+
+      {alertesStock.length > 0 && (
+        <div className="vente-message vente-warning">
+          <strong>Alerte stock apres vente :</strong>
+          <ul style={{ margin: '6px 0 0 16px' }}>
+            {alertesStock.map((a, i) => (
+              <li key={i}>
+                {a.produit} — {a.stock_restant} unité(s) restante(s) (seuil : {a.seuil_alerte})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="vente-compact">
         <div className="select-produit">
@@ -157,7 +192,11 @@ function Ventes() {
                 <div className="total-final">Total: <strong>{totalApresRemise.toFixed(2)} DH</strong></div>
               </div>
 
-              <button className="btn-primary btn-valider" onClick={validerVente}>
+              <button
+                className="btn-primary btn-valider"
+                onClick={validerVente}
+                disabled={panier.length === 0}
+              >
                 Valider la vente
               </button>
             </>

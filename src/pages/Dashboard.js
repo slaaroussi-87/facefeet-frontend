@@ -5,6 +5,7 @@ const API = 'http://127.0.0.1:8000';
 
 function Dashboard() {
   const [ventes, setVentes] = useState([]);
+  const [alertesStock, setAlertesStock] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -13,8 +14,12 @@ function Dashboard() {
 
   const fetchData = async () => {
     try {
-      const res = await axios.get(`${API}/ventes/`);
-      setVentes(res.data);
+      const [ventesRes, alertesRes] = await Promise.all([
+        axios.get(`${API}/ventes/`),
+        axios.get(`${API}/stock/alertes`),
+      ]);
+      setVentes(ventesRes.data);
+      setAlertesStock(alertesRes.data);
     } catch (err) {
       console.error('Erreur:', err);
     } finally {
@@ -66,6 +71,18 @@ function Dashboard() {
     ventesParDate[date].total += v.total_net || 0;
   });
 
+  const produitsQte = {};
+  ventes.forEach((v) => {
+    (v.lignes_vente || []).forEach((l) => {
+      const nom = l.nom_produit || '—';
+      if (!produitsQte[nom]) produitsQte[nom] = 0;
+      produitsQte[nom] += l.quantite || 0;
+    });
+  });
+  const top5 = Object.entries(produitsQte)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5);
+
   const dernieresVentes = [...ventes]
     .sort((a, b) => {
       const dateA = `${a.date || ''} ${a.heure || ''}`;
@@ -113,6 +130,112 @@ function Dashboard() {
           <div className="stat-label">CA total</div>
         </div>
       </div>
+
+      {/* Alertes stock */}
+      {alertesStock.length > 0 && (
+        <div className="dash-alertes-stock">
+          <div className="dash-alertes-header">
+            <span className="dash-alertes-titre">Stock faible</span>
+            <span className="dash-alertes-count">{alertesStock.length} produit{alertesStock.length > 1 ? 's' : ''}</span>
+          </div>
+          <div className="dash-alertes-liste">
+            {alertesStock.map((p) => {
+              const stock = p.stock ?? 0;
+              const seuil = p.seuil_alerte ?? 5;
+              const pct = seuil > 0 ? Math.min(Math.round((stock / seuil) * 100), 100) : 0;
+              const critique = stock === 0;
+              return (
+                <div key={p.id} className="dash-alerte-item">
+                  <div className="dash-alerte-top">
+                    <span className="dash-alerte-nom">{p.nom}</span>
+                    <span className={`dash-alerte-qty ${critique ? 'critique' : ''}`}>
+                      {critique ? 'Rupture' : `${stock} unité${stock > 1 ? 's' : ''}`}
+                    </span>
+                  </div>
+                  <div className="dash-alerte-bar-bg">
+                    <div
+                      className="dash-alerte-bar-fill"
+                      style={{
+                        width: `${pct}%`,
+                        background: critique ? '#e74c3c' : '#f39c12',
+                      }}
+                    />
+                  </div>
+                  <div className="dash-alerte-seuil">seuil : {seuil}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Graphiques côte à côte */}
+      <div className="charts-grid">
+
+      {/* Graphique CA par jour */}
+      {Object.keys(ventesParDate).length > 0 && (() => {
+        const jours = Object.entries(ventesParDate)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .slice(-14);
+        const maxCA = Math.max(...jours.map(([, d]) => d.total));
+        return (
+          <div className="section-card" style={{ marginBottom: 20 }}>
+            <h2>📈 CA par jour</h2>
+            <div className="chart-bars">
+              {jours.map(([date, data]) => {
+                const hauteur = maxCA > 0 ? Math.round((data.total / maxCA) * 80) : 0;
+                const isToday = date === today;
+                return (
+                  <div key={date} className="chart-col">
+                    <div className="chart-value">{data.total.toFixed(0)} DH</div>
+                    <div className="chart-bar-wrap">
+                      <div
+                        className="chart-bar"
+                        style={{
+                          height: hauteur,
+                          background: isToday ? '#27ae60' : '#7ab07e',
+                        }}
+                      />
+                    </div>
+                    <div className="chart-label">{date.slice(5)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Graphique Top 5 produits */}
+      {top5.length > 0 && (
+        <div className="section-card" style={{ marginBottom: 20 }}>
+          <h2>🏆 Top 5 produits vendus</h2>
+          <div className="top5-bars">
+            {top5.map(([nom, qte], i) => {
+              const maxQte = top5[0][1];
+              const largeur = Math.round((qte / maxQte) * 100);
+              const couleurs = ['#27ae60', '#7ab07e', '#95c49a', '#b0d4b4', '#cce4ce'];
+              return (
+                <div key={nom} className="top5-row">
+                  <div className="top5-label">
+                    <span className="top5-rank">#{i + 1}</span>
+                    <span className="top5-nom">{nom}</span>
+                  </div>
+                  <div className="top5-bar-wrap">
+                    <div
+                      className="top5-bar"
+                      style={{ width: `${largeur}%`, background: couleurs[i] }}
+                    />
+                    <span className="top5-qte">{qte} unité{qte > 1 ? 's' : ''}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      </div>{/* fin charts-grid */}
 
       <div className="dashboard-sections">
         <div className="section-card">
