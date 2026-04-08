@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-
-const API = 'https://facefeet-backend.onrender.com';
+import API from '../config';
 
 function Stock() {
   const [produits, setProduits] = useState([]);
@@ -12,12 +11,13 @@ function Stock() {
   const [editSeuil, setEditSeuil] = useState('');
   const [editStockId, setEditStockId] = useState(null);
   const [editStockVal, setEditStockVal] = useState('');
+  const [message, setMessage] = useState(null);
+  const intervalRef = useRef(null);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const showMessage = (type, texte) => {
+    setMessage({ type, texte });
+    setTimeout(() => setMessage(null), 4000);
+  };
 
   const fetchData = async () => {
     try {
@@ -36,30 +36,71 @@ function Stock() {
     }
   };
 
+  const startPolling = () => {
+    if (intervalRef.current) return;
+    intervalRef.current = setInterval(fetchData, 30000);
+  };
+
+  const stopPolling = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    startPolling();
+
+    // Pause le polling quand l'onglet est caché (fix 17)
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        fetchData();
+        startPolling();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  // ── Ajustement +/- via POST /stock/mouvement (fix 11 : trace dans l'historique)
   const ajusterStock = async (produit, delta) => {
     const nouveauStock = (produit.stock ?? 0) + delta;
     if (nouveauStock < 0) return;
     try {
-      await axios.put(`${API}/stock/${produit.id}`, {
-        stock: nouveauStock,
-        seuil_alerte: produit.seuil_alerte ?? 5,
+      const type = delta > 0 ? 'entree' : 'sortie';
+      const res = await axios.post(`${API}/stock/mouvement`, {
+        produit_id: produit.id,
+        type,
+        quantite: Math.abs(delta),
+        motif: 'Ajustement manuel',
       });
-      // Mise à jour locale uniquement — pas de re-fetch pour ne pas changer l'ordre
+      const stockApres = res.data.nouveau_stock;
+
       setProduits(prev =>
-        prev.map(p => p.id === produit.id ? { ...p, stock: nouveauStock } : p)
+        prev.map(p => p.id === produit.id ? { ...p, stock: stockApres } : p)
       );
       const seuil = produit.seuil_alerte ?? 5;
-      if (nouveauStock <= seuil) {
+      if (stockApres <= seuil) {
         setAlertes(prev => {
           const dejaDedans = prev.some(a => a.id === produit.id);
-          if (dejaDedans) return prev.map(a => a.id === produit.id ? { ...a, stock: nouveauStock } : a);
-          return [...prev, { ...produit, stock: nouveauStock }];
+          if (dejaDedans) return prev.map(a => a.id === produit.id ? { ...a, stock: stockApres } : a);
+          return [...prev, { ...produit, stock: stockApres }];
         });
       } else {
         setAlertes(prev => prev.filter(a => a.id !== produit.id));
       }
+      // Rafraîchir l'historique des mouvements
+      const mouvRes = await axios.get(`${API}/stock/mouvements`);
+      setMouvements(mouvRes.data);
     } catch (err) {
-      console.error('Erreur ajustement:', err.response?.data || err.message);
+      showMessage('erreur', err.response?.data?.detail || 'Erreur lors de l\'ajustement du stock.');
     }
   };
 
@@ -67,10 +108,22 @@ function Stock() {
     const val = parseInt(editStockVal);
     if (isNaN(val) || val < 0) { setEditStockId(null); return; }
     try {
-      await axios.put(`${API}/stock/${produit.id}`, {
-        stock: val,
-        seuil_alerte: produit.seuil_alerte ?? 5,
-      });
+      const stockActuel = produit.stock ?? 0;
+      const delta = val - stockActuel;
+      if (delta !== 0) {
+        const type = delta > 0 ? 'entree' : 'sortie';
+        await axios.post(`${API}/stock/mouvement`, {
+          produit_id: produit.id,
+          type,
+          quantite: Math.abs(delta),
+          motif: 'Saisie directe',
+        });
+      } else {
+        await axios.put(`${API}/stock/${produit.id}`, {
+          stock: val,
+          seuil_alerte: produit.seuil_alerte ?? 5,
+        });
+      }
       const seuil = produit.seuil_alerte ?? 5;
       setProduits(prev =>
         prev.map(p => p.id === produit.id ? { ...p, stock: val } : p)
@@ -84,23 +137,27 @@ function Stock() {
       } else {
         setAlertes(prev => prev.filter(a => a.id !== produit.id));
       }
+      const mouvRes = await axios.get(`${API}/stock/mouvements`);
+      setMouvements(mouvRes.data);
     } catch (err) {
-      console.error('Erreur sauvegarde stock:', err.response?.data || err.message);
+      showMessage('erreur', err.response?.data?.detail || 'Erreur lors de la sauvegarde du stock.');
     } finally {
       setEditStockId(null);
     }
   };
 
   const saveSeuil = async (produit) => {
+    const val = parseInt(editSeuil);
+    if (isNaN(val) || val < 0) { setEditId(null); return; }
     try {
       await axios.put(`${API}/stock/${produit.id}`, {
         stock: produit.stock ?? 0,
-        seuil_alerte: parseInt(editSeuil),
+        seuil_alerte: val,
       });
       setEditId(null);
       fetchData();
     } catch (err) {
-      console.error('Erreur seuil:', err);
+      showMessage('erreur', 'Erreur lors de la mise à jour du seuil.');
     }
   };
 
@@ -115,7 +172,11 @@ function Stock() {
         </span>
       </div>
 
-      {/* Section alertes */}
+      {message && (
+        <div className={`vente-message vente-${message.type}`}>{message.texte}</div>
+      )}
+
+      {/* Alertes */}
       {alertes.length > 0 && (
         <div className="stock-alertes">
           <div className="stock-alertes-titre">
@@ -136,7 +197,7 @@ function Stock() {
         </div>
       )}
 
-      {/* Tableau des produits */}
+      {/* Inventaire */}
       <div className="section-card" style={{ marginBottom: 20 }}>
         <h2>Inventaire</h2>
         <div className="table-container">
